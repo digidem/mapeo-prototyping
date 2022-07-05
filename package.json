@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/digidem/mapeo-prototyping#readme",
   "dependencies": {
+    "@hyperswarm/secret-stream": "^6.0.0",
     "@mapeo/crypto": "^1.0.0-alpha.1",
     "hypercore-crypto": "^3.3.0",
     "hyperswarm": "^4.1.0",
