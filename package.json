@@ -1,0 +1,28 @@
+{
+  "name": "mapeo-prototyping",
+  "version": "0.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/digidem/mapeo-prototyping.git"
+  },
+  "author": "Digital Democracy",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/digidem/mapeo-prototyping/issues"
+  },
+  "homepage": "https://github.com/digidem/mapeo-prototyping#readme",
+  "dependencies": {
+    "@mapeo/crypto": "^1.0.0-alpha.1",
+    "hypercore-crypto": "^3.3.0",
+    "hyperswarm": "^4.1.0",
+    "mdns-sd-discovery": "^3.3.0",
+    "mri": "^1.2.0",
+    "z32": "^1.0.0"
+  }
+}
