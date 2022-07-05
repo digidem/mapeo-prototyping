@@ -44,11 +44,11 @@ export class Discovery extends EventEmitter {
 		)
 	}
 
-	encodeDiscoveryKey (key) {
+	encodeTopic (key) {
 		return z32.encode(key)
 	}
 
-	decodeDiscoveryKey (key) {
+	decodeTopic (key) {
 		return z32.decode(key)
 	}
 
@@ -73,7 +73,7 @@ export class Discovery extends EventEmitter {
 					if (remotePublicKey === this.identityPublicKey) {
 						return
 					}
-	
+
 					this.#sockets.set(remotePublicKey, stream)
 					this.emit('connection', stream, {
 						identityPublicKey: remotePublicKey,
@@ -231,7 +231,7 @@ export class Discovery extends EventEmitter {
 	 * @param {Buffer} topicBuffer
 	 */
 	async leave (topicBuffer) {
-		let topic = this.#topics.get(this.encodeDiscoveryKey(topicBuffer))
+		let topic = this.#topics.get(this.encodeTopic(topicBuffer))
 
 		if (!topic) {
 			return
@@ -270,7 +270,38 @@ export class Discovery extends EventEmitter {
 
 	}
 
-	destroy () {
+	async _closeServer () {
+		return new Promise((resolve) => {
+			this.#tcp.close(() => {
+				resolve()
+			})
+		})
+	}
+
+	async destroy () {
+		if (this.dht) {
+			await this.dht.destroy()
+		}
+
+		if (this.mdns) {
+			await this._closeServer()
+		}
+
+		for (const topic of this.#topics.values()) {
+			topic.destroy()
+		}
+	}
+}
+
+export class Peer extends EventEmitter {
+	constructor (options) {
+	}
+
+	addTopic (topic) {
+
+	}
+
+	removeTopic (topic) {
 
 	}
 }
@@ -336,5 +367,15 @@ export class Topic extends EventEmitter {
 
 	toBuffer() {
 		return this.topicBuffer
+	}
+
+	destroy () {
+		if (this.mdns) {
+			this.mdns.destroy()
+		}
+
+		if (this.dht) {
+			this.dht.destroy()
+		}
 	}
 }

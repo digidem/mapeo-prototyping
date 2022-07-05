@@ -51,3 +51,11 @@ discover.on('connection', async (connection, info) => {
 // setTimeout(async () => {
 // 	await discover.leave(keyPair3.publicKey)
 // }, 3111);
+
+process.on('SIGINT', async () => {
+	console.log('\nexiting...')
+	await discover.leave(keyPair1.publicKey)
+	await discover.leave(keyPair2.publicKey)
+	await discover.leave(keyPair3.publicKey)
+	await discover.destroy()
+})
