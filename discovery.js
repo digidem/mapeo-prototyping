@@ -1,9 +1,9 @@
-import net from 'net'
 import { EventEmitter } from 'events'
+import net from 'net'
 
+import SecretStream from '@hyperswarm/secret-stream'
 import Hyperswarm from 'hyperswarm'
 import { MdnsDiscovery } from 'mdns-sd-discovery'
-import SecretStream from '@hyperswarm/secret-stream'
 import z32 from 'z32'
 
 export class Discovery extends EventEmitter {
@@ -27,7 +27,7 @@ export class Discovery extends EventEmitter {
 			this.#tcp = net.createServer()
 			this.mdns = mdns
 		}
-	
+
 		if (dht) {
 			this.dht = new Hyperswarm({ keyPair: identityKeyPair, server: false, client: true })
 		}
@@ -70,7 +70,7 @@ export class Discovery extends EventEmitter {
 				)
 
 				const connection = new SecretStream(false, socket)
-	
+
 				connection.on('connect', () => {
 					const remotePublicKey = connection.remotePublicKey.toString('hex')
 
@@ -96,21 +96,25 @@ export class Discovery extends EventEmitter {
 						this.emit('connection', connection, peer)
 					}
 
-					console.info('peers server', this.peers.map((peer) => {
-						return {
-							identityPublicKey: peer.identityPublicKey.slice(0, 8),
-							topics: peer.topics,
-							port: peer.port,
-							host: peer.host,
-							discoveryType: peer.discoveryType
-						}
-					}), this.port)
+					console.info(
+						'peers server',
+						this.peers.map((peer) => {
+							return {
+								identityPublicKey: peer.identityPublicKey.slice(0, 8),
+								topics: peer.topics,
+								port: peer.port,
+								host: peer.host,
+								discoveryType: peer.discoveryType
+							}
+						}),
+						this.port
+					)
 				})
 
 				connection.on('close', async () => {
 					const remotePublicKey = connection.remotePublicKey.toString('hex')
 					const peer = this.#peers.get(remotePublicKey)
-	
+
 					if (peer) {
 						this.emit('connectionClosed', peer)
 						peer.destroy()
@@ -131,18 +135,19 @@ export class Discovery extends EventEmitter {
 
 				if (peer) {
 					connection.destroy()
-				} else {
-					peer = new Peer({
-						topics: info.topics,
-						host: connection.rawStream.remoteHost,
-						port: connection.rawStream.remotePort,
-						discoveryType: 'dht',
-						identityPublicKey: publicKey,
-						connection
-					})
-
-					this.#peers.set(publicKey, peer)
+					return
 				}
+
+				peer = new Peer({
+					topics: info.topics,
+					host: connection.rawStream.remoteHost,
+					port: connection.rawStream.remotePort,
+					discoveryType: 'dht',
+					identityPublicKey: publicKey,
+					connection
+				})
+
+				this.#peers.set(publicKey, peer)
 
 				info.on('topic', (topic) => {
 					peer.addTopic(topic)
@@ -151,7 +156,7 @@ export class Discovery extends EventEmitter {
 				connection.on('close', async () => {
 					await peer.destroy()
 					peer.on('close', () => {
-						this.#peers.delete(remotePublicKey)
+						this.#peers.delete(publicKey)
 					})
 				})
 
@@ -258,15 +263,19 @@ export class Discovery extends EventEmitter {
 
 				this.#peers.set(txt.identity, peer)
 
-				console.info('peers initiator', this.peers.map((peer) => {
-					return {
-						identityPublicKey: peer.identityPublicKey.slice(0, 8),
-						topics: peer.topics,
-						port: peer.port,
-						host: peer.host,
-						discoveryType: peer.discoveryType
-					}
-				}), this.port)
+				console.info(
+					'peers initiator',
+					this.peers.map((peer) => {
+						return {
+							identityPublicKey: peer.identityPublicKey.slice(0, 8),
+							topics: peer.topics,
+							port: peer.port,
+							host: peer.host,
+							discoveryType: peer.discoveryType
+						}
+					}),
+					this.port
+				)
 
 				if (connection) {
 					connection.on('connect', () => {
@@ -276,7 +285,7 @@ export class Discovery extends EventEmitter {
 					connection.on('closed', async () => {
 						peer.destroy()
 						peer.on('close', () => {
-							this.#peers.delete(remotePublicKey)
+							this.#peers.delete(txt.identity)
 						})
 					})
 
@@ -289,7 +298,7 @@ export class Discovery extends EventEmitter {
 			topic.mdns.on('serviceDown', (service) => {
 				const { txt } = service
 
-				let topic = this.#topics.get(txt.topic)
+				const topic = this.#topics.get(txt.topic)
 
 				if (!topic) {
 					return
@@ -300,7 +309,7 @@ export class Discovery extends EventEmitter {
 				if (peer && peer.topics.length === 1 && peer.topics.includes(txt.topic)) {
 					peer.destroy()
 					peer.on('close', () => {
-						this.#peers.delete(remotePublicKey)
+						this.#peers.delete(txt.identity)
 					})
 				}
 			})
@@ -335,7 +344,7 @@ export class Discovery extends EventEmitter {
 		const stream = net.connect({
 			host,
 			port,
-			allowHalfOpen: true,
+			allowHalfOpen: true
 		})
 
 		const connection = new SecretStream(true, stream, {
@@ -349,7 +358,7 @@ export class Discovery extends EventEmitter {
 	 * @param {Buffer} topicBuffer
 	 */
 	async leave (topicBuffer) {
-		let topic = this.#topics.get(this.encodeTopic(topicBuffer))
+		const topic = this.#topics.get(this.encodeTopic(topicBuffer))
 
 		if (!topic) {
 			return
@@ -388,7 +397,7 @@ export class Discovery extends EventEmitter {
 		const peer = this.#peers.get(identityPublicKey)
 		peer.destroy()
 		peer.on('close', () => {
-			this.#peers.delete(remotePublicKey)
+			this.#peers.delete(identityPublicKey)
 		})
 	}
 
@@ -409,7 +418,6 @@ export class Discovery extends EventEmitter {
 		for (const topic of this.#topics.values()) {
 			topic.destroy()
 		}
-
 	}
 
 	async _closeServer () {
@@ -426,7 +434,7 @@ export class Discovery extends EventEmitter {
 
 	_upsertPeer (identityPublicKey, options) {
 		let peer = this.#peers.get(identityPublicKey)
-		
+
 		if (peer) {
 			peer.update(options)
 		} else {
@@ -528,7 +536,7 @@ export class Peer extends EventEmitter {
 		)
 	}
 
-	toJSON() {
+	toJSON () {
 		return {
 			topics: this.topics,
 			identityPublicKey: this.identityPublicKey,
@@ -588,7 +596,7 @@ export class Topic extends EventEmitter {
 		})
 	}
 
-	toJSON() {
+	toJSON () {
 		return {
 			server: this.server,
 			topic: this.topicString,
@@ -597,11 +605,11 @@ export class Topic extends EventEmitter {
 		}
 	}
 
-	toString() {
+	toString () {
 		return this.topicString
 	}
 
-	toBuffer() {
+	toBuffer () {
 		return this.topicBuffer
 	}
 
