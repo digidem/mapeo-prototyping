@@ -9,7 +9,6 @@ import z32 from 'z32'
 export class Discovery extends EventEmitter {
 	#identityKeyPair
 	#topics = new Map()
-	#sockets = new Map()
 	#peers = new Map()
 	#tcp
 
@@ -30,7 +29,7 @@ export class Discovery extends EventEmitter {
 		}
 	
 		if (dht) {
-			this.dht = new Hyperswarm()
+			this.dht = new Hyperswarm({ keyPair: identityKeyPair, server: false, client: true })
 		}
 	}
 
@@ -41,6 +40,12 @@ export class Discovery extends EventEmitter {
 	get topics () {
 		return Array.from(
 			this.#topics.values()
+		)
+	}
+
+	get peers () {
+		return Array.from(
+			this.#peers.values()
 		)
 	}
 
@@ -64,79 +69,132 @@ export class Discovery extends EventEmitter {
 					socket.address()
 				)
 
-				const stream = new SecretStream(false, socket)
+				const connection = new SecretStream(false, socket)
 	
-				stream.on('connect', () => {
-					const remotePublicKey = stream.remotePublicKey.toString('hex')
-					// this.#peers.set(remotePublicKey, peer)
-	
+				connection.on('connect', () => {
+					const remotePublicKey = connection.remotePublicKey.toString('hex')
+
 					if (remotePublicKey === this.identityPublicKey) {
 						return
 					}
 
-					this.#sockets.set(remotePublicKey, stream)
-					this.emit('connection', stream, {
-						identityPublicKey: remotePublicKey,
-						discoveryType: 'mdns',
-						host: socketAddress.address,
-						port: socketAddress.port,
-						client: false
-					})
+					let peer = this.#peers.get(remotePublicKey)
+
+					if (peer) {
+						connection.destroy()
+					} else {
+						peer = new Peer({
+							topics: [],
+							identityPublicKey: remotePublicKey,
+							discoveryType: 'mdns',
+							host: socketAddress.address,
+							port: socketAddress.port,
+							connection
+						})
+
+						this.#peers.set(remotePublicKey, peer)
+						this.emit('connection', connection, peer)
+					}
+
+					console.info('peers server', this.peers.map((peer) => {
+						return {
+							identityPublicKey: peer.identityPublicKey.slice(0, 8),
+							topics: peer.topics,
+							port: peer.port,
+							host: peer.host,
+							discoveryType: peer.discoveryType
+						}
+					}), this.port)
 				})
 
-				stream.on('close', () => {
-					const remotePublicKey = stream.remotePublicKey.toString('hex')
+				connection.on('close', async () => {
+					const remotePublicKey = connection.remotePublicKey.toString('hex')
 					const peer = this.#peers.get(remotePublicKey)
 	
 					if (peer) {
 						this.emit('connectionClosed', peer)
+						peer.destroy()
+
+						peer.on('close', () => {
+							this.#peers.delete(remotePublicKey)
+						})
 					}
-	
-					this.#peers.delete(remotePublicKey)
-					this.#sockets.delete(remotePublicKey)
 				})
 			})
 		}
 
 		if (this.dht) {
-			this.dht.on('connection', (connection, info) => {
+			this.dht.on('connection', async (connection, info) => {
 				const publicKey = connection.remotePublicKey.toString('hex')
 
-				this.emit('connection', connection, {
-					topics: info.topics,
-					host: connection.rawStream.remoteHost,
-					port: connection.rawStream.remotePort,
-					discoveryType: 'dht',
-					identityPublicKey: publicKey,
+				let peer = this.#peers.get(publicKey)
+
+				if (peer) {
+					connection.destroy()
+				} else {
+					peer = new Peer({
+						topics: info.topics,
+						host: connection.rawStream.remoteHost,
+						port: connection.rawStream.remotePort,
+						discoveryType: 'dht',
+						identityPublicKey: publicKey,
+						connection
+					})
+
+					this.#peers.set(publicKey, peer)
+				}
+
+				info.on('topic', (topic) => {
+					peer.addTopic(topic)
+				})
+
+				connection.on('close', async () => {
+					await peer.destroy()
+					peer.on('close', () => {
+						this.#peers.delete(remotePublicKey)
+					})
+				})
+
+				connection.on('error', (error) => {
+					if (error.code === 'ECONNRESET') {
+						// ignore
+					}
+					connection.destroy()
+				})
+
+				this.emit('connection', connection, peer)
+
+				process.nextTick(async () => {
+					for (const topic of this.#topics.values()) {
+						await this.dht.flush()
+						await topic.dht.refresh({ server: false, client: true })
+					}
 				})
 			})
 		}
 	}
 
-	_updateStatus (topic, status) {
-		topic.updateStatus(status)
-
-		this.emit('status', {
-			topic: topic.toString(),
-			...topic.status()
-		})
-	}
-
 	/**
 	 * @param {Buffer} topicBuffer
+	 * @param {Object} options
+	 * @param {Boolean} [options.mdns]
+	 * @param {Boolean} [options.dht]
 	 */
-	async join (topicBuffer) {
+	async join (topicBuffer, options = {}) {
+		const mdnsActivated = options.mdns ? options.mdns : (this.mdns && !!this.mdns)
+		const dhtActivated = options.dht ? options.dht : (this.dht && !!this.dht)
+
 		const topic = new Topic({
 			topicBuffer,
-			mdns: this.mdns ? new MdnsDiscovery() : false,
-			dht: this.dht ? this.dht.join(topicBuffer) : false
+			mdns: mdnsActivated ? new MdnsDiscovery() : false,
+			dht: dhtActivated ? this.dht.join(topicBuffer, { server: true, client: true }) : false
 		})
 
 		this.#topics.set(topic.toString(), topic)
-	
+
 		this._updateStatus(topic, {
-			mdns: this.mdns ? 'joining' : null,
-			dht: this.dht ? 'joining' : null
+			mdns: mdnsActivated ? 'joining' : null,
+			dht: dhtActivated ? 'joining' : null
 		})
 
 		const serviceType = {
@@ -145,18 +203,16 @@ export class Discovery extends EventEmitter {
 			subtypes: [topic.toString()]
 		}
 
-		if (this.mdns) {
-			topic.mdns.lookup(serviceType)
-
+		if (mdnsActivated) {
 			topic.mdns.on('stopAnnouncing', () => {
-				this._updateStatus(topic, { mdns: this.mdns ? 'closed' : false })
+				this._updateStatus(topic, {
+					mdns: 'closed'
+				})
 			})
 
-			topic.mdns.announce(serviceType, {
-				port: this.port,
-				txt: {
-					topic: topic.toString(),
-					identity: this.identityPublicKey
+			topic.mdns.on('error', (error) => {
+				if (typeof error === 'function') {
+					// ignore this because why would this happen?
 				}
 			})
 
@@ -171,40 +227,63 @@ export class Discovery extends EventEmitter {
 				}
 
 				if (txt.identity === this.identityPublicKey) {
-					this._updateStatus(topic, { mdns: this.mdns ? 'joined' : false })
+					this._updateStatus(topic, {
+						mdns: 'joined'
+					})
 
 					return
 				}
-				console.log('found service', service.host, service.port, service.txt.identity)
 
-				const socket = net.connect({
-					host,
-					port,
-					allowHalfOpen: true,
-				})
+				let connection
+				let peer = this.#peers.get(txt.identity)
 
-				const stream = new SecretStream(true, socket, {
-					keyPair: this.#identityKeyPair
-				})
+				if (peer) {
+					peer.update({
+						host,
+						port
+					})
+					peer.addTopic(topic.toString())
+				} else {
+					connection = this._connect(host, port)
 
-				stream.on('connect', () => {
-					this.emit('connection', stream, {
+					peer = new Peer({
+						topics: [topic.toString()],
 						discoveryType: 'mdns',
 						host,
 						port,
 						identityPublicKey: txt.identity,
-						client: true
+						connection
 					})
-				})
+				}
 
-				stream.on('closed', () => {
-					this.emit('connectionClosed', peer)
+				this.#peers.set(txt.identity, peer)
 
-					// this.#peers.delete(txt.identity)
-					this.#sockets.delete(txt.identity)
-				})
+				console.info('peers initiator', this.peers.map((peer) => {
+					return {
+						identityPublicKey: peer.identityPublicKey.slice(0, 8),
+						topics: peer.topics,
+						port: peer.port,
+						host: peer.host,
+						discoveryType: peer.discoveryType
+					}
+				}), this.port)
 
-				this.#sockets.set(txt.identity, stream)
+				if (connection) {
+					connection.on('connect', () => {
+						this.emit('connection', connection, peer)
+					})
+
+					connection.on('closed', async () => {
+						peer.destroy()
+						peer.on('close', () => {
+							this.#peers.delete(remotePublicKey)
+						})
+					})
+
+					connection.on('error', (error) => {
+						console.error('mdns tcp connection error', error)
+					})
+				}
 			})
 
 			topic.mdns.on('serviceDown', (service) => {
@@ -216,15 +295,54 @@ export class Discovery extends EventEmitter {
 					return
 				}
 
+				const peer = this.#peers.get(txt.identity)
+
+				if (peer && peer.topics.length === 1 && peer.topics.includes(txt.topic)) {
+					peer.destroy()
+					peer.on('close', () => {
+						this.#peers.delete(remotePublicKey)
+					})
+				}
 			})
-		}
-		
-		if (this.dht) {
-			await topic.dht.flushed()
+
+			topic.mdns.announce(serviceType, {
+				port: this.port,
+				txt: {
+					topic: topic.toString(),
+					identity: this.identityPublicKey
+				}
+			})
+
+			topic.mdns.lookup(serviceType)
 		}
 
-		this._updateStatus(topic, { dht: this.dht ? 'joined' : null })
+		if (dhtActivated) {
+			this.dht.flush()
+			await topic.dht.flushed()
+			this._updateStatus(topic, { dht: 'joined' })
+		}
+
 		return topic
+	}
+
+	getPeersByTopic (topic) {
+		return this.peers.filter((peer) => {
+			return peer.topics.include(topic)
+		})
+	}
+
+	_connect (host, port) {
+		const stream = net.connect({
+			host,
+			port,
+			allowHalfOpen: true,
+		})
+
+		const connection = new SecretStream(true, stream, {
+			keyPair: this.#identityKeyPair
+		})
+
+		return connection
 	}
 
 	/**
@@ -251,26 +369,54 @@ export class Discovery extends EventEmitter {
 		}
 
 		if (this.mdns) {
-			topic.mdns.unannounce(topic.toString())
+			topic.destroy()
 		}
 	}
 
 	/**
-	 * @param {String} options.address
+	 * @param {String} options.host
 	 * @param {Number} options.port
 	 */
 	joinPeer (options) {
-
+		const connection = this._connect(options.host, options.port)
 	}
 
 	/**
 	 * @param {Buffer|String} identityPublicKey
 	 */
-	leavePeer (identityPublicKey) {
+	async leavePeer (identityPublicKey) {
+		const peer = this.#peers.get(identityPublicKey)
+		peer.destroy()
+		peer.on('close', () => {
+			this.#peers.delete(remotePublicKey)
+		})
+	}
+
+	async destroy () {
+		for (const peer of this.#peers.values()) {
+			peer.destroy()
+			peer.on('close', () => {
+				this.#peers.delete(peer.identityPublicKey)
+			})
+		}
+
+		this._closeServer()
+
+		if (this.dht) {
+			await this.dht.destroy()
+		}
+
+		for (const topic of this.#topics.values()) {
+			topic.destroy()
+		}
 
 	}
 
 	async _closeServer () {
+		if (!this.#tcp) {
+			return
+		}
+
 		return new Promise((resolve) => {
 			this.#tcp.close(() => {
 				resolve()
@@ -278,31 +424,121 @@ export class Discovery extends EventEmitter {
 		})
 	}
 
-	async destroy () {
-		if (this.dht) {
-			await this.dht.destroy()
+	_upsertPeer (identityPublicKey, options) {
+		let peer = this.#peers.get(identityPublicKey)
+		
+		if (peer) {
+			peer.update(options)
+		} else {
+			peer = new Peer(options)
 		}
 
-		if (this.mdns) {
-			await this._closeServer()
-		}
+		this.#peers.set(identityPublicKey, peer)
+		return peer
+	}
 
-		for (const topic of this.#topics.values()) {
-			topic.destroy()
-		}
+	_updateStatus (topic, status) {
+		topic.updateStatus(status)
+
+		this.emit('status', {
+			topic: topic.toString(),
+			...topic.status()
+		})
 	}
 }
 
 export class Peer extends EventEmitter {
+	#topics = new Set()
+
 	constructor (options) {
+		super()
+		const {
+			connection,
+			topics = [],
+			host,
+			port,
+			discoveryType,
+			identityPublicKey
+		} = options
+
+		this.addTopics(topics)
+		this.connection = connection
+		this.host = host
+		this.port = port
+		this.discoveryType = discoveryType
+		this.identityPublicKey = identityPublicKey
+
+		connection.on('close', () => {
+			this.emit('close')
+		})
+	}
+
+	update (options) {
+		const {
+			connection,
+			topics = [],
+			host,
+			port,
+			discoveryType,
+			identityPublicKey
+		} = options
+
+		if (topics && topics.length) {
+			this.addTopics(topics)
+		}
+
+		if (connection) {
+			this.connection = connection
+		}
+
+		if (host) {
+			this.host = host
+		}
+
+		if (port) {
+			this.port = port
+		}
+
+		if (discoveryType) {
+			this.discoveryType = discoveryType
+		}
+
+		if (identityPublicKey) {
+			this.identityPublicKey = identityPublicKey
+		}
 	}
 
 	addTopic (topic) {
+		this.#topics.add(topic)
+	}
 
+	addTopics (topics) {
+		for (const topic of topics) {
+			this.#topics.add(topic)
+		}
 	}
 
 	removeTopic (topic) {
+		this.#topics.delete(topic)
+	}
 
+	get topics () {
+		return Array.from(
+			this.#topics.values()
+		)
+	}
+
+	toJSON() {
+		return {
+			topics: this.topics,
+			identityPublicKey: this.identityPublicKey,
+			host: this.host,
+			port: this.port
+		}
+	}
+
+	destroy () {
+		this.connection.destroy()
 	}
 }
 

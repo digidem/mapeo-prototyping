@@ -18,12 +18,15 @@
   },
   "homepage": "https://github.com/digidem/mapeo-prototyping#readme",
   "dependencies": {
+    "@hyperswarm/dht": "^6.2.0",
     "@hyperswarm/secret-stream": "^6.0.0",
     "@mapeo/crypto": "^1.0.0-alpha.1",
+    "ansi-diff-stream": "^1.2.1",
     "hypercore-crypto": "^3.3.0",
     "hyperswarm": "^4.1.0",
-    "mdns-sd-discovery": "^3.3.0",
+    "mdns-sd-discovery": "^3.3.1",
     "mri": "^1.2.0",
+    "why-is-node-running": "^2.2.2",
     "z32": "^1.0.0"
   }
 }

@@ -1,3 +1,4 @@
+// import log from 'why-is-node-running'
 import crypto from 'hypercore-crypto'
 
 import { Discovery } from './discovery.js'
@@ -12,7 +13,8 @@ const keyPair2 = crypto.keyPair()
 const keyPair3 = crypto.keyPair()
 
 const discover = new Discovery({
-	identityKeyPair
+	identityKeyPair,
+	dht: true
 })
 
 if (!key1) {
@@ -24,10 +26,10 @@ node example.js ${keyPair1.publicKey.toString('hex')} ${keyPair2.publicKey.toStr
 }
 
 await discover.ready()
-console.log('identity', identityKeyPair.publicKey.toString('hex'), discover.host, discover.port)
+console.log('identity', identityKeyPair.publicKey.toString('hex').slice(0, 8))
 
 discover.on('status', (status) => {
-	// console.log('status', status.topic, 'mdns:', status.mdns, 'dht:', status.dht)
+	// console.log('status', status.topic.slice(0, 8), 'mdns:', status.mdns, 'dht:', status.dht)
 })
 
 const topic = await discover.join(key1 ? Buffer.from(key1, 'hex') : keyPair1.publicKey)
@@ -35,7 +37,7 @@ const topic2 = await discover.join(key2 ? Buffer.from(key2, 'hex') : keyPair2.pu
 const topic3 = await discover.join(key3 ? Buffer.from(key3, 'hex') : keyPair3.publicKey)
 
 discover.on('connection', async (connection, info) => {
-	console.log('connection', info.host, info.port, info.identityPublicKey, info.client)
+	console.log('connection')
 	// const topic = discover.status(keyPair.publicKey)
 	// await discover.leave(keyPair.publicKey)
 })
@@ -55,7 +57,8 @@ discover.on('connection', async (connection, info) => {
 process.on('SIGINT', async () => {
 	console.log('\nexiting...')
 	await discover.leave(keyPair1.publicKey)
-	await discover.leave(keyPair2.publicKey)
-	await discover.leave(keyPair3.publicKey)
+	// await discover.leave(keyPair2.publicKey)
+	// await discover.leave(keyPair3.publicKey)
 	await discover.destroy()
+	// log()
 })
